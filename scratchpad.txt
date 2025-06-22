@@ -1,8 +1,0 @@
-Analyse the batch file, what made it run? why Visual studio env wasn't properly initialised
-- i think it's because of the compiler but then what is cl.exe is for?
-why developer prompt is required?
-might as well learn on the internals to it.
-
-why loader_ctx is required? keep an eye on it
-
-read notes 
