@@ -15,7 +15,8 @@ typedef enum _LoaderStatus {
     LoaderFailed,
     LoaderBadFormat,
     LoaderInvalid,
-    LoaderNoMem
+    LoaderNoMem,
+    LoaderNotFound
 } LoaderStatus;
 
 // For contextual information that loader will need
@@ -23,6 +24,61 @@ typedef struct _loader_ctx {
     void *p;
     size_t size;
 } loader_ctx;
+
+
+static
+LoaderStatus handle_imports(unsigned char* image_base,
+                            const IMAGE_NT_HEADERS* nt)
+{
+    LoaderStatus status = LoaderSuccess;
+    
+    const IMAGE_IMPORT_DESCRIPTOR* imp = (const IMAGE_IMPORT_DESCRIPTOR*)(image_base
+                                                                          + nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+
+    const uint32_t imp_size = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+
+    // We will continue processing until we hit the terminating NULL
+    for(; imp->Characteristics; imp++)
+    {
+        const char* library_name = (const char*)(image_base + imp->Name);
+        HMODULE hm = NULL;
+
+        // We will try to load the library, if it fails, we will exit, as we can't finish loading the library.
+        if((hm = LoadLibrary(library_name)) == NULL) return LoaderNotFound;
+
+        char* func_name = NULL;
+        
+        // This will be the INT
+        IMAGE_THUNK_DATA* orig_first_thunk = (IMAGE_THUNK_DATA*)(image_base + imp->OriginalFirstThunk);
+
+        // This will be the IAT
+        IMAGE_THUNK_DATA* first_thunk = (IMAGE_THUNK_DATA*)(image_base + imp->FirstThunk);
+
+        for(uint32_t i = 0; orig_first_thunk[i].u1.AddressOfData; i++)
+        {
+            IMAGE_IMPORT_BY_NAME* by_name = NULL;
+            const char* search_value = NULL;
+            
+            // Update first_thunk->u1.Function to point to the export
+            if(orig_first_thunk[i].u1.Ordinal & IMAGE_ORDINAL_FLAG)
+            {
+                search_value = (const char*)IMAGE_ORDINAL(orig_first_thunk[i].u1.Ordinal);
+            }
+            else
+            {
+                search_value = (const char*)((IMAGE_IMPORT_BY_NAME*)(image_base + orig_first_thunk[i].u1.AddressOfData))->Name;
+            }
+
+            if(0 == (first_thunk[i].u1.Function = (ULONG_PTR)GetProcAddress(hm, search_value)))
+            {
+                FreeLibrary(hm);
+                return LoaderNotFound;
+            }
+        }
+    }
+
+    return status;
+}
 
 // Walking through the relocation table brick-by-brick.
 //
