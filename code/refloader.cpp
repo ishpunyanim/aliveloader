@@ -183,15 +183,17 @@ copy_sections(unsigned char* dest,
               uint32_t dest_size,
               const unsigned char* src,
               uint32_t src_size,
-              const IMAGE_NT_HEADERS* nt) {
-    uint16_t sec_count = 0;
+              const IMAGE_NT_HEADERS* nt)
+{
+    uint16_t sec_count = nt->FileHeader.NumberOfSections;
     // Calculate pointer to the first IMAGE_SECTION_HEADER.
     // We start at &nt->OptionalHeader, cast to (unsigned char*) to allow byte-wise offsetting,
     // then add SizeOfOptionalHeader (in bytes) to skip over the optional header.
     // Finally, cast the result to (IMAGE_SECTION_HEADER*) to access section headers properly.
     const IMAGE_SECTION_HEADER *sec = (const IMAGE_SECTION_HEADER*)(const unsigned char*)(&nt->OptionalHeader + nt->FileHeader.SizeOfOptionalHeader);
 
-    for(uint16_t i = 0; i < sec_count; i++) {
+    for(uint16_t i = 0; i < sec_count; i++)
+    {
         unsigned char *sec_va = dest + sec[i].VirtualAddress;
         const unsigned char *sec_offset = src + sec[i].PointerToRawData;
         uint32_t sec_size = sec[i].SizeOfRawData;
@@ -208,7 +210,8 @@ copy_headers(unsigned char* dest,
              uint32_t dest_size,
              const unsigned char* src,
              uint32_t src_size,
-             const IMAGE_NT_HEADERS* nt) {
+             const IMAGE_NT_HEADERS* nt)
+{
     if(dest == NULL || src == NULL || nt == NULL) return LoaderInvalid;
 
     uint32_t hdr_size = 0;
@@ -225,7 +228,8 @@ copy_image(unsigned char* dest,
            uint32_t dest_size,
            unsigned char* src,
            uint32_t src_size,
-           const IMAGE_NT_HEADERS* nt) {
+           const IMAGE_NT_HEADERS* nt)
+{
     LoaderStatus status = LoaderSuccess;
     
     status = copy_headers(dest, dest_size, src, src_size, nt);
@@ -235,7 +239,8 @@ copy_image(unsigned char* dest,
 }
 
 static LoaderStatus
-validate_dos_header(const unsigned char* buff, uint32_t size) {
+validate_dos_header(const unsigned char* buff, uint32_t size)
+{
     if(buff == NULL || size < sizeof(IMAGE_DOS_HEADER)) return LoaderBadFormat;
     if(buff[0] != 'M' || buff[1] != 'Z') return LoaderBadFormat;
 
@@ -248,7 +253,8 @@ validate_dos_header(const unsigned char* buff, uint32_t size) {
 }
 
 LoaderStatus
-reflective_loadlibrary(loader_ctx* ctx, const void* buffer, uint32_t size) {
+reflective_loadlibrary(loader_ctx* ctx, const void* buffer, uint32_t size)
+{
     LoaderStatus status = LoaderSuccess;
     unsigned char* cbuffer = (unsigned char*)buffer;
     const IMAGE_NT_HEADERS* nt = NULL;
@@ -257,7 +263,8 @@ reflective_loadlibrary(loader_ctx* ctx, const void* buffer, uint32_t size) {
 
     if(ctx == NULL) return LoaderInvalid;
     
-    if(validate_dos_header(cbuffer, size) == LoaderFailed) {
+    if(validate_dos_header(cbuffer, size) == LoaderFailed)
+    {
         return LoaderFailed;
     }
 
@@ -274,16 +281,56 @@ reflective_loadlibrary(loader_ctx* ctx, const void* buffer, uint32_t size) {
 
     // Copy data
     status = copy_image(new_buffer, nb_size, cbuffer, size, nt);
-    if(status != LoaderSuccess) goto cleanup; 
+    if(status != LoaderSuccess) goto cleanup;
 
+    // Handle relocations
+    status = relocate_image(new_buffer, nt);
+    if(status != LoaderSuccess) goto cleanup;
+
+    // Resolve imports
+    status = handle_imports(new_buffer, nt);
+    if(status != LoaderSuccess) goto cleanup;
+
+    // Call entry point
+    uintptr_t entry = (uintptr_t)new_buffer + nt->OptionalHeader.AddressOfEntryPoint;
+    typedef BOOL(WINAPI *DllMainProto)(HINSTANCE, DWORD, LPVOID);
+    DllMainProto entry_fn = (DllMainProto)entry;
+    entry_fn((HINSTANCE)new_buffer, DLL_PROCESS_ATTACH, NULL);
+
+    // Save to context
+    ctx->p = new_buffer;
+    ctx->size = nb_size;
+
+    return LoaderSuccess;
+    
 cleanup:
-    if(status != LoaderSuccess) {
+    if(status != LoaderSuccess)
+    {
         VirtualFree(new_buffer, 0, MEM_RELEASE);
     }
     
     return status;
 }
 
-int main() {
+int main()
+{
+    unsigned char buff[] = {
+        0x4d, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    unsigned int buff_size = 102;
+
+    loader_ctx ctx = {0};
+    LoaderStatus result = reflective_loadlibrary(&ctx, buff, (uint32_t)buff_size);
+    
+    printf("Loader returned: %d\n", result);
+
     return 0;
 }
