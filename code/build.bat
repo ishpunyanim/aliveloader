@@ -18,6 +18,7 @@ REM cl %CommonCompilerFlags% ..\code\refloader.cpp /link -subsystem:CONSOLE %Com
 echo Output...
 REM 64-bit build
 cl %CommonCompilerFlags% ..\code\refloader.cpp /link %CommonLinkerFlags%
+cl /LD ..\code\msgbox.c user32.lib /Fe:..\code\msgbox.dll /link -subsystem:CONSOLE 
 
 echo Done. Checking for output...
 if exist refloader.exe (
